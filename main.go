@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/labstack/echo/v4"
@@ -34,16 +35,23 @@ type Page struct {
 	CycleHitsTodo int    `json:"CycleHitsTodo"`
 }
 
+type Stat struct {
+	CampaignPageID int
+	Date           string
+	Type           string
+	Param          string
+}
+
 // -------------------------------------------------------- //
 //
 //	FUNCTIONS
 //
 // -------------------------------------------------------- //
-func getPageToDispatch(campaign Campaign) Page {
+func getPage(campaign Campaign) Page {
 	page := Page{}
 
 	for _, p := range campaign.Pages {
-		if p.CycleHitsDone <= p.CycleHitsTodo {
+		if p.CycleHitsDone < p.CycleHitsTodo {
 			page = p
 		}
 	}
@@ -51,8 +59,25 @@ func getPageToDispatch(campaign Campaign) Page {
 	return page
 }
 
-func updateCampagnePage(campaign Campaign, page Page) Campaign {
+func resetPages(campaign Campaign) Campaign {
+	sum := 0
+	for _, p := range campaign.Pages {
+		sum += p.CycleHitsDone
+	}
 
+	if sum >= 100 {
+		for i, p := range campaign.Pages {
+			p.CycleHitsDone = 0
+			campaign.Pages[i] = p
+		}
+	}
+
+	campaign.CyclesDone++
+
+	return campaign
+}
+
+func updateCampaign(campaign Campaign, page Page) Campaign {
 	for i, p := range campaign.Pages {
 		if p.ID == page.ID {
 			page.CycleHitsDone++
@@ -76,6 +101,7 @@ func main() {
 	// ------------------------------------------ //
 	e.GET("/:key", func(c echo.Context) error {
 		key := c.Param("key")
+		param := c.QueryParam("pubfeed")
 		ctx := context.Background()
 
 		// ------------------------------------------ //
@@ -87,7 +113,7 @@ func main() {
 			DB:       0,
 		})
 		val, err := rdb.Get(ctx, "campaign:"+key).Result()
-		fmt.Println("Campaign ("+key+") :", val)
+		fmt.Println("Campaign :", val)
 
 		if err != nil {
 			//panic(err)
@@ -96,18 +122,42 @@ func main() {
 
 		campaign := Campaign{}
 		json.Unmarshal([]byte(val), &campaign)
+
 		// ------------------------------------------ //
 
 		// ------------------------------------------ //
 		//	COMPUTE PAGE & REFRESH REDIS
 		// ------------------------------------------ //
-		page := getPageToDispatch(campaign)
-		campaign = updateCampagnePage(campaign, page)
+		page := getPage(campaign)
 
-		json, err := json.Marshal(campaign)
-		err2 := rdb.Set(ctx, key, json, 0).Err()
+		if page == (Page{}) {
+			campaign = resetPages(campaign)
+			page = getPage(campaign)
+		}
 
-		if err2 != nil {
+		campaign = updateCampaign(campaign, page)
+
+		campaignJson, err := json.Marshal(campaign)
+		err = rdb.Set(ctx, "campaign:"+key, campaignJson, 0).Err()
+
+		if err != nil {
+			panic(err)
+		}
+		// ------------------------------------------ //
+
+		// ------------------------------------------ //
+		//	PUSH STATS TO REDIS QUEUE
+		// ------------------------------------------ //
+		currentTime := time.Now()
+		stat := Stat{
+			page.ID,
+			currentTime.Format("2006-01-02"),
+			"hit",
+			param,
+		}
+		statJson, err := json.Marshal(stat)
+		err = rdb.LPush(ctx, "tasks", statJson).Err()
+		if err != nil {
 			panic(err)
 		}
 		// ------------------------------------------ //
