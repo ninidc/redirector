@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -30,16 +33,20 @@ type Page struct {
 	ID            int    `json:"ID"`
 	Name          string `json:"Name"`
 	URL           string `json:"URL"`
-	Traffic       string `json:"Traffic"`
 	CycleHitsDone int    `json:"CycleHitsDone"`
 	CycleHitsTodo int    `json:"CycleHitsTodo"`
 }
 
-type Stat struct {
+type Analytic struct {
 	CampaignPageID int
 	Date           string
 	Type           string
-	Param          string
+	Params         []AnalyticParam
+}
+
+type AnalyticParam struct {
+	Name  string
+	Value string
 }
 
 // -------------------------------------------------------- //
@@ -88,6 +95,66 @@ func updateCampaign(campaign Campaign, page Page) Campaign {
 	return campaign
 }
 
+func (analytic *Analytic) addParam(param AnalyticParam) []AnalyticParam {
+	analytic.Params = append(analytic.Params, param)
+	return analytic.Params
+}
+
+func sendJSFile(w http.ResponseWriter, r *http.Request) {
+	data, err := ioutil.ReadFile("assets/tracking.js")
+	if err != nil {
+		http.Error(w, "Couldn't read file", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Write(data)
+}
+
+func getRedirectUrl(c echo.Context, page Page) string {
+
+	params, _ := url.ParseQuery(strings.Split(strings.Split(c.Request().URL.String(), "?")[1], "#")[0])
+
+	_url := strings.Split(page.URL, "#")
+	pageUrl := _url[0]
+	pageUrlParams, _ := url.ParseQuery(page.URL)
+	hash := ""
+
+	if len(_url) > 1 {
+		hash = "#" + _url[1]
+	}
+
+	if len(params) > 0 {
+		if len(pageUrlParams) > 1 {
+			return fmt.Sprintf("%s&intoid=%d&%s%s",
+				pageUrl,
+				page.ID,
+				params.Encode(),
+				hash,
+			)
+		}
+		return fmt.Sprintf("%s?intoid=%d&%s%s",
+			pageUrl,
+			page.ID,
+			params.Encode(),
+			hash,
+		)
+	}
+
+	if len(pageUrlParams) > 1 {
+		return fmt.Sprintf("%s&intoid=%d%s",
+			pageUrl,
+			page.ID,
+			hash,
+		)
+	}
+
+	return fmt.Sprintf("%s?intoid=%d%s",
+		pageUrl,
+		page.ID,
+		hash,
+	)
+}
+
 // -------------------------------------------------------- //
 //
 //	MAIN
@@ -101,7 +168,17 @@ func main() {
 	// ------------------------------------------ //
 	e.GET("/:key", func(c echo.Context) error {
 		key := c.Param("key")
-		param := c.QueryParam("pubfeed")
+
+		if key == "tracking.js" {
+			data, err := ioutil.ReadFile("assets/tracking.js")
+
+			if err != nil {
+				return c.String(http.StatusNotFound, "Not found")
+			}
+
+			return c.Blob(http.StatusOK, "application/javascript; charset=utf-8", data)
+		}
+
 		ctx := context.Background()
 
 		// ------------------------------------------ //
@@ -137,8 +214,8 @@ func main() {
 
 		campaign = updateCampaign(campaign, page)
 
-		campaignJson, err := json.Marshal(campaign)
-		err = rdb.Set(ctx, "campaign:"+key, campaignJson, 0).Err()
+		res, err := json.Marshal(campaign)
+		err = rdb.Set(ctx, "campaign:"+key, res, 0).Err()
 
 		if err != nil {
 			panic(err)
@@ -148,21 +225,39 @@ func main() {
 		// ------------------------------------------ //
 		//	PUSH STATS TO REDIS QUEUE
 		// ------------------------------------------ //
-		currentTime := time.Now()
-		stat := Stat{
+		params := c.Request().URL.Query() // Get URL params
+
+		analytic := Analytic{
 			page.ID,
-			currentTime.Format("2006-01-02"),
+			time.Now().Format("2006-01-02"),
 			"hit",
-			param,
+			[]AnalyticParam{},
 		}
-		statJson, err := json.Marshal(stat)
-		err = rdb.LPush(ctx, "tasks", statJson).Err()
+
+		for k := range params { // Loop and push each param to analytic struct
+			analytic.addParam(AnalyticParam{
+				k,
+				params.Get(k),
+			})
+		}
+
+		res, err = json.Marshal(analytic)
+
+		err = rdb.LPush(ctx, "tasks", res).Err()
+
 		if err != nil {
 			panic(err)
 		}
 		// ------------------------------------------ //
 
-		return c.String(http.StatusOK, page.URL)
+		return c.String(http.StatusOK, getRedirectUrl(c, page))
+	})
+
+	// ------------------------------------------ //
+	//	HOOK (VIEW)
+	// ------------------------------------------ //
+	e.POST("/hooks/campaign/view", func(c echo.Context) error {
+		return c.String(http.StatusOK, "Greetings from the redirector !")
 	})
 
 	// ------------------------------------------ //
