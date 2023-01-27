@@ -63,7 +63,7 @@ if(QueryString.intoid) {
     if(x != null && x == uri){
 
     } else {
-    	xhr.open('POST', 'http://localhost:8081/hooks/campaign/view');
+    	xhr.open('POST', '{{APP_URL}}/hooks/campaign/view');
 	    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
 	    xhr.onload = function() {};
 	    xhr.send(encodeURI(str));
