@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 )
 
 // -------------------------------------------------------- //
@@ -238,6 +239,11 @@ func getPage(campaign Campaign, rdb *redis.Client) Page {
 // -------------------------------------------------------- //
 func main() {
 	e := echo.New()
+
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept},
+	}))
 
 	// ------------------------------------------ //
 	//	HOOK (VIEW)
