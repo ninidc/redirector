@@ -130,7 +130,7 @@ func getPageUrl(c echo.Context, page Page) string {
 	}
 
 	if len(params) > 0 {
-		if len(pageUrlParams) > 1 {
+		if len(pageUrlParams) > 0 {
 			return fmt.Sprintf("%s&intoid=%d&%s%s",
 				pageUrl,
 				page.ID,
@@ -146,7 +146,7 @@ func getPageUrl(c echo.Context, page Page) string {
 		)
 	}
 
-	if len(pageUrlParams) > 1 {
+	if len(pageUrlParams) > 0 {
 		return fmt.Sprintf("%s&intoid=%d%s",
 			pageUrl,
 			page.ID,
@@ -330,7 +330,9 @@ func main() {
 		// ------------------------------------------ //
 		saveAnalytic(c, rdb, page, "hit")
 		// ------------------------------------------ //
+
 		return c.Redirect(302, getPageUrl(c, page))
+		// return c.String(http.StatusOK, getPageUrl(c, page))
 	})
 
 	// ------------------------------------------ //
