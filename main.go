@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -49,6 +50,10 @@ type Analytic struct {
 type AnalyticParam struct {
 	Name  string
 	Value string
+}
+
+type Client struct {
+	// contains filtered or unexported fields
 }
 
 // -------------------------------------------------------- //
@@ -156,6 +161,76 @@ func getPageUrl(c echo.Context, page Page) string {
 	)
 }
 
+func getRedisClient() *redis.Client {
+	if os.Getenv("REDIS_TLS") == "false" {
+		return redis.NewClient(&redis.Options{
+			Addr:     os.Getenv("REDIS_HOST") + ":" + os.Getenv("REDIS_PORT"),
+			Password: os.Getenv("REDIS_PASSWORD"),
+			DB:       0,
+		})
+	} else {
+		return redis.NewClient(&redis.Options{
+			Addr:     os.Getenv("REDIS_HOST") + ":" + os.Getenv("REDIS_PORT"),
+			Password: os.Getenv("REDIS_PASSWORD"),
+			DB:       0,
+			TLSConfig: &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			},
+		})
+	}
+}
+
+func saveAnalytic(c echo.Context, rdb *redis.Client, page Page, t string) {
+	ctx := context.Background()
+
+	params := c.Request().URL.Query() // Get URL params
+
+	analytic := Analytic{
+		page.ID,
+		time.Now().Format("2006-01-02"),
+		t,
+		[]AnalyticParam{},
+	}
+
+	if len(params) > 0 {
+		for k := range params { // Loop and push each param to analytic struct
+			analytic.addParam(AnalyticParam{
+				k,
+				params.Get(k),
+			})
+		}
+	}
+
+	res, err := json.Marshal(analytic)
+
+	err = rdb.LPush(ctx, "tasks", res).Err()
+
+	if err != nil {
+		panic(err)
+	}
+}
+
+func getPage(campaign Campaign, rdb *redis.Client) Page {
+	ctx := context.Background()
+	page := GetPageToDispatch(campaign)
+
+	if page == (Page{}) {
+		campaign = ResetCampaignCycles(campaign)
+		page = GetPageToDispatch(campaign)
+	}
+
+	campaign = UpdatePageCampaignCycles(campaign, page)
+
+	res, err := json.Marshal(campaign)
+	err = rdb.Set(ctx, "campaign:"+campaign.Key, res, 0).Err()
+
+	if err != nil {
+		panic(err)
+	}
+
+	return page
+}
+
 // -------------------------------------------------------- //
 //
 //	MAIN
@@ -175,11 +250,7 @@ func main() {
 
 			ctx := context.Background()
 
-			rdb := redis.NewClient(&redis.Options{
-				Addr:     os.Getenv("REDIS_HOST") + ":" + os.Getenv("REDIS_PORT"),
-				Password: os.Getenv("REDIS_PASSWORD"),
-				DB:       0,
-			})
+			rdb := getRedisClient()
 
 			analytic := Analytic{
 				intoid,
@@ -233,12 +304,10 @@ func main() {
 		// ------------------------------------------ //
 		//	GET & PAGE FROM REDIS
 		// ------------------------------------------ //
-		rdb := redis.NewClient(&redis.Options{
-			Addr:     os.Getenv("REDIS_HOST") + ":" + os.Getenv("REDIS_PORT"),
-			Password: os.Getenv("REDIS_PASSWORD"),
-			DB:       0,
-		})
+		rdb := getRedisClient()
 		val, err := rdb.Get(ctx, "campaign:"+key).Result()
+
+		fmt.Println("Key :", key)
 		fmt.Println("Campaign :", val)
 
 		if err != nil {
@@ -248,58 +317,20 @@ func main() {
 
 		campaign := Campaign{}
 		json.Unmarshal([]byte(val), &campaign)
-
 		// ------------------------------------------ //
 
 		// ------------------------------------------ //
 		//	COMPUTE PAGE & REFRESH REDIS
 		// ------------------------------------------ //
-		page := GetPageToDispatch(campaign)
-
-		if page == (Page{}) {
-			campaign = ResetCampaignCycles(campaign)
-			page = GetPageToDispatch(campaign)
-		}
-
-		campaign = UpdatePageCampaignCycles(campaign, page)
-
-		res, err := json.Marshal(campaign)
-		err = rdb.Set(ctx, "campaign:"+key, res, 0).Err()
-
-		if err != nil {
-			panic(err)
-		}
+		page := getPage(campaign, rdb)
 		// ------------------------------------------ //
 
 		// ------------------------------------------ //
 		//	PUSH ANALYTIC TO REDIS QUEUE
 		// ------------------------------------------ //
-		params := c.Request().URL.Query() // Get URL params
-
-		analytic := Analytic{
-			page.ID,
-			time.Now().Format("2006-01-02"),
-			"hit",
-			[]AnalyticParam{},
-		}
-
-		for k := range params { // Loop and push each param to analytic struct
-			analytic.addParam(AnalyticParam{
-				k,
-				params.Get(k),
-			})
-		}
-
-		res, err = json.Marshal(analytic)
-
-		err = rdb.LPush(ctx, "tasks", res).Err()
-
-		if err != nil {
-			panic(err)
-		}
+		saveAnalytic(c, rdb, page, "hit")
 		// ------------------------------------------ //
-
-		return c.Redirect(http.StatusMovedPermanently, getPageUrl(c, page))
+		return c.Redirect(302, getPageUrl(c, page))
 	})
 
 	// ------------------------------------------ //
