@@ -290,7 +290,7 @@ func view(c echo.Context) error {
 
 		rdb := getRedisClient()
 
-		analytic := Analytic{
+		analytic := &Analytic{
 			intoid,
 			time.Now().Format("2006-01-02"),
 			"view",
@@ -298,7 +298,6 @@ func view(c echo.Context) error {
 		}
 
 		params, _ := c.FormParams()
-		fmt.Println("params :", params)
 
 		for k := range params { // Loop and push each param to analytic struct
 			analytic.addParam(AnalyticParam{
@@ -315,6 +314,7 @@ func view(c echo.Context) error {
 			panic(err)
 		}
 
+		analytic = nil
 		rdb.Close()
 	}
 
@@ -328,9 +328,7 @@ func view(c echo.Context) error {
 // -------------------------------------------------------- //
 func main() {
 	e := echo.New()
-
-	g := e.Group("/hooks/campaign/view")
-	g.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
 		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept},
 	}))
