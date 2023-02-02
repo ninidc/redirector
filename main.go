@@ -223,11 +223,6 @@ func getPage(campaign Campaign, rdb *redis.Client, ctx context.Context) Page {
 
 	campaign = UpdatePageCampaignCycles(ctx, campaign, page)
 
-	rdb.Close()
-	ctx.Done()
-
-	runtime.GC()
-
 	res, err := json.Marshal(campaign)
 	err = rdb.Set(ctx, "campaign:"+campaign.Key, res, 0).Err()
 
@@ -329,7 +324,11 @@ func view(c echo.Context) error {
 		}
 
 		analytic = nil
+
 		rdb.Close()
+		ctx.Done()
+
+		runtime.GC()
 	}
 
 	return c.String(http.StatusOK, "POST !")
