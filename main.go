@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -272,6 +274,8 @@ func redirect(c echo.Context) error {
 	rdb.Close()
 	ctx.Done()
 
+	runtime.GC()
+
 	return c.Redirect(302, getPageUrl(c, page))
 	//return c.String(http.StatusOK, getPageUrl(c, page))
 }
@@ -327,6 +331,11 @@ func view(c echo.Context) error {
 //
 // -------------------------------------------------------- //
 func main() {
+
+	//runtime.GC()
+	debug.SetGCPercent(-1)
+	debug.SetMemoryLimit(1)
+
 	e := echo.New()
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
