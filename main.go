@@ -329,7 +329,7 @@ func view(c echo.Context) error {
 func main() {
 	e := echo.New()
 
-	g := e.Group("/:key")
+	g := e.Group("/hooks/campaign/view")
 	g.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
 		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept},
