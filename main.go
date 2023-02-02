@@ -282,6 +282,8 @@ func main() {
 			if err != nil {
 				panic(err)
 			}
+
+			rdb.Close()
 		}
 
 		return c.String(http.StatusOK, "POST !")
