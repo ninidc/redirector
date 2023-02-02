@@ -259,6 +259,12 @@ func redirect(c echo.Context) error {
 	val, err := rdb.Get(ctx, "campaign:"+key).Result()
 
 	if err != nil {
+
+		rdb.Close()
+		ctx.Done()
+
+		runtime.GC()
+
 		return c.String(http.StatusOK, "Campaign not found")
 	}
 
