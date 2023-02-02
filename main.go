@@ -17,6 +17,7 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	echopprof "github.com/sevenNt/echo-pprof"
 )
 
 // -------------------------------------------------------- //
@@ -53,21 +54,18 @@ type AnalyticParam struct {
 	Value string
 }
 
-type Client struct {
-	// contains filtered or unexported fields
-}
-
 // -------------------------------------------------------- //
 //
 //	FUNCTIONS
 //
 // -------------------------------------------------------- //
 func GetPageToDispatch(campaign Campaign) Page {
-	page := Page{}
+	var page Page
 
 	for _, p := range campaign.Pages {
 		if p.CycleHitsDone < p.CycleHitsTodo {
 			page = p
+			break
 		}
 	}
 
@@ -76,14 +74,12 @@ func GetPageToDispatch(campaign Campaign) Page {
 
 func ResetCampaignCycles(campaign Campaign) Campaign {
 	sum := 0
-	for _, p := range campaign.Pages {
+	for i, p := range campaign.Pages {
 		sum += p.CycleHitsDone
-	}
-
-	if sum >= 100 {
-		for i, p := range campaign.Pages {
+		if sum >= 100 {
 			p.CycleHitsDone = 0
 			campaign.Pages[i] = p
+			sum = 0
 		}
 	}
 
@@ -92,11 +88,12 @@ func ResetCampaignCycles(campaign Campaign) Campaign {
 	return campaign
 }
 
-func UpdatePageCampaignCycles(campaign Campaign, page Page) Campaign {
+func UpdatePageCampaignCycles(ctx context.Context, campaign Campaign, page Page) Campaign {
 	for i, p := range campaign.Pages {
 		if p.ID == page.ID {
 			page.CycleHitsDone++
 			campaign.Pages[i] = page
+			break
 		}
 	}
 
@@ -106,16 +103,6 @@ func UpdatePageCampaignCycles(campaign Campaign, page Page) Campaign {
 func (analytic *Analytic) addParam(param AnalyticParam) []AnalyticParam {
 	analytic.Params = append(analytic.Params, param)
 	return analytic.Params
-}
-
-func sendJSFile(w http.ResponseWriter, r *http.Request) {
-	data, err := ioutil.ReadFile("assets/tracking.js")
-	if err != nil {
-		http.Error(w, "Couldn't read file", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	w.Write(data)
 }
 
 func getPageUrl(c echo.Context, page Page) string {
@@ -181,10 +168,8 @@ func getRedisClient() *redis.Client {
 	}
 }
 
-func saveAnalytic(c echo.Context, rdb *redis.Client, page Page, t string) {
-	ctx := context.Background()
-
-	params := c.Request().URL.Query() // Get URL params
+func saveAnalytic(c echo.Context, ctx context.Context, rdb *redis.Client, page Page, t string) error {
+	params := c.Request().URL.Query()
 
 	analytic := Analytic{
 		page.ID,
@@ -194,7 +179,7 @@ func saveAnalytic(c echo.Context, rdb *redis.Client, page Page, t string) {
 	}
 
 	if len(params) > 0 {
-		for k := range params { // Loop and push each param to analytic struct
+		for k := range params {
 			analytic.addParam(AnalyticParam{
 				k,
 				params.Get(k),
@@ -202,17 +187,31 @@ func saveAnalytic(c echo.Context, rdb *redis.Client, page Page, t string) {
 		}
 	}
 
-	res, err := json.Marshal(analytic)
-
-	err = rdb.LPush(ctx, "tasks", res).Err()
-
+	data, err := json.Marshal(analytic)
 	if err != nil {
-		panic(err)
+		return err
 	}
+
+	exists, err := rdb.Exists(ctx, "tasks").Result()
+	if err != nil {
+		return err
+	}
+
+	if exists == 0 {
+		if err = rdb.Set(ctx, "tasks", "", 0).Err(); err != nil {
+			return err
+		}
+	}
+
+	err = rdb.LPush(ctx, "tasks", data).Err()
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func getPage(campaign Campaign, rdb *redis.Client) Page {
-	ctx := context.Background()
+func getPage(campaign Campaign, rdb *redis.Client, ctx context.Context) Page {
 	page := GetPageToDispatch(campaign)
 
 	if page == (Page{}) {
@@ -220,7 +219,7 @@ func getPage(campaign Campaign, rdb *redis.Client) Page {
 		page = GetPageToDispatch(campaign)
 	}
 
-	campaign = UpdatePageCampaignCycles(campaign, page)
+	campaign = UpdatePageCampaignCycles(ctx, campaign, page)
 
 	res, err := json.Marshal(campaign)
 	err = rdb.Set(ctx, "campaign:"+campaign.Key, res, 0).Err()
@@ -234,128 +233,114 @@ func getPage(campaign Campaign, rdb *redis.Client) Page {
 
 // -------------------------------------------------------- //
 //
+//	HANDLERS
+//
+// -------------------------------------------------------- //
+func tracking(c echo.Context) error {
+	data, err := ioutil.ReadFile("assets/tracking.js")
+
+	if err != nil {
+		return c.String(http.StatusNotFound, "Not found")
+	}
+
+	output := bytes.Replace(data, []byte("{{APP_URL}}"), []byte(os.Getenv("HTTP_DOMAIN")), -1)
+
+	return c.Blob(http.StatusOK, "application/javascript; charset=utf-8", output)
+}
+
+func redirect(c echo.Context) error {
+	key := c.Param("key")
+	ctx := context.Background()
+
+	//	GET PAGE FROM REDIS
+	rdb := getRedisClient()
+	val, err := rdb.Get(ctx, "campaign:"+key).Result()
+
+	if err != nil {
+		return c.String(http.StatusOK, "Campaign not found")
+	}
+
+	campaign := Campaign{}
+	json.Unmarshal([]byte(val), &campaign)
+
+	//	COMPUTE PAGE & REFRESH REDIS
+	page := getPage(campaign, rdb, ctx)
+
+	//	PUSH ANALYTIC TO REDIS QUEUE
+	saveAnalytic(c, ctx, rdb, page, "hit")
+
+	rdb.Close()
+	ctx.Done()
+
+	return c.Redirect(302, getPageUrl(c, page))
+	//return c.String(http.StatusOK, getPageUrl(c, page))
+}
+
+func root(c echo.Context) error {
+	return c.JSON(http.StatusOK, struct{ Status string }{Status: "OK"})
+}
+
+func view(c echo.Context) error {
+	key := c.FormValue("intoid")
+
+	if key != "" {
+		intoid, err := strconv.Atoi(key)
+
+		ctx := context.Background()
+
+		rdb := getRedisClient()
+
+		analytic := Analytic{
+			intoid,
+			time.Now().Format("2006-01-02"),
+			"view",
+			[]AnalyticParam{},
+		}
+
+		params, _ := c.FormParams()
+		fmt.Println("params :", params)
+
+		for k := range params { // Loop and push each param to analytic struct
+			analytic.addParam(AnalyticParam{
+				k,
+				params.Get(k),
+			})
+		}
+
+		res, err := json.Marshal(analytic)
+
+		err = rdb.LPush(ctx, "tasks", res).Err()
+
+		if err != nil {
+			panic(err)
+		}
+
+		rdb.Close()
+	}
+
+	return c.String(http.StatusOK, "POST !")
+}
+
+// -------------------------------------------------------- //
+//
 //	MAIN
 //
 // -------------------------------------------------------- //
 func main() {
 	e := echo.New()
 
-	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+	g := e.Group("/:key")
+	g.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
 		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept},
 	}))
 
-	// ------------------------------------------ //
-	//	HOOK (VIEW)
-	// ------------------------------------------ //
-	e.POST("/hooks/campaign/view", func(c echo.Context) error {
-		key := c.FormValue("intoid")
+	e.POST("/hooks/campaign/view", view)
+	e.GET("/tracking.js", tracking)
+	e.GET("/:key", redirect)
+	e.GET("/", root)
 
-		if key != "" {
-			intoid, err := strconv.Atoi(key)
+	echopprof.Wrap(e)
 
-			ctx := context.Background()
-
-			rdb := getRedisClient()
-
-			analytic := Analytic{
-				intoid,
-				time.Now().Format("2006-01-02"),
-				"view",
-				[]AnalyticParam{},
-			}
-
-			params, _ := c.FormParams()
-			fmt.Println("params :", params)
-
-			for k := range params { // Loop and push each param to analytic struct
-				analytic.addParam(AnalyticParam{
-					k,
-					params.Get(k),
-				})
-			}
-
-			res, err := json.Marshal(analytic)
-
-			err = rdb.LPush(ctx, "tasks", res).Err()
-
-			if err != nil {
-				panic(err)
-			}
-
-			rdb.Close()
-		}
-
-		return c.String(http.StatusOK, "POST !")
-	})
-
-	// ------------------------------------------ //
-	//	CAMPAIGN
-	// ------------------------------------------ //
-	e.GET("/:key", func(c echo.Context) error {
-		key := c.Param("key")
-
-		if key == "tracking.js" {
-			data, err := ioutil.ReadFile("assets/tracking.js")
-
-			if err != nil {
-				return c.String(http.StatusNotFound, "Not found")
-			}
-
-			output := bytes.Replace(data, []byte("{{APP_URL}}"), []byte(os.Getenv("HTTP_DOMAIN")), -1)
-
-			return c.Blob(http.StatusOK, "application/javascript; charset=utf-8", output)
-		}
-
-		ctx := context.Background()
-
-		// ------------------------------------------ //
-		//	GET & PAGE FROM REDIS
-		// ------------------------------------------ //
-		rdb := getRedisClient()
-		val, err := rdb.Get(ctx, "campaign:"+key).Result()
-
-		fmt.Println("Key :", key)
-		fmt.Println("Campaign :", val)
-
-		if err != nil {
-			//panic(err)
-			return c.String(http.StatusOK, "Campaign not found")
-		}
-
-		campaign := Campaign{}
-		json.Unmarshal([]byte(val), &campaign)
-		// ------------------------------------------ //
-
-		// ------------------------------------------ //
-		//	COMPUTE PAGE & REFRESH REDIS
-		// ------------------------------------------ //
-		page := getPage(campaign, rdb)
-		// ------------------------------------------ //
-
-		// ------------------------------------------ //
-		//	PUSH ANALYTIC TO REDIS QUEUE
-		// ------------------------------------------ //
-		saveAnalytic(c, rdb, page, "hit")
-		// ------------------------------------------ //
-
-		return c.Redirect(302, getPageUrl(c, page))
-		// return c.String(http.StatusOK, getPageUrl(c, page))
-	})
-
-	// ------------------------------------------ //
-	//	ROOT
-	// ------------------------------------------ //
-	e.GET("/", func(c echo.Context) error {
-		return c.String(http.StatusOK, "Greetings from the redirector !")
-	})
-
-	// ------------------------------------------ //
-	//	PING
-	// ------------------------------------------ //
-	e.GET("/ping", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, struct{ Status string }{Status: "OK"})
-	})
-
-	e.Logger.Fatal(e.Start(os.Getenv("HTTP_HOST") + ":" + os.Getenv("HTTP_PORT")))
+	e.Start(":" + os.Getenv("HTTP_PORT"))
 }
