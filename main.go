@@ -223,6 +223,11 @@ func getPage(campaign Campaign, rdb *redis.Client, ctx context.Context) Page {
 
 	campaign = UpdatePageCampaignCycles(ctx, campaign, page)
 
+	rdb.Close()
+	ctx.Done()
+
+	runtime.GC()
+
 	res, err := json.Marshal(campaign)
 	err = rdb.Set(ctx, "campaign:"+campaign.Key, res, 0).Err()
 
@@ -283,7 +288,6 @@ func redirect(c echo.Context) error {
 	runtime.GC()
 
 	return c.Redirect(302, getPageUrl(c, page))
-	//return c.String(http.StatusOK, getPageUrl(c, page))
 }
 
 func root(c echo.Context) error {
@@ -338,9 +342,8 @@ func view(c echo.Context) error {
 // -------------------------------------------------------- //
 func main() {
 
-	//runtime.GC()
 	debug.SetGCPercent(-1)
-	debug.SetMemoryLimit(1)
+	//	debug.SetMemoryLimit(1)
 
 	e := echo.New()
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
