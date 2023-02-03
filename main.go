@@ -190,10 +190,12 @@ func saveAnalytic(c echo.Context, ctx context.Context, rdb *redis.Client, page P
 	}
 
 	data, err := json.Marshal(analytic)
+
 	if err != nil {
 		return err
 	}
 
+	fmt.Println("Analytic pushed to redis : ", data)
 	err = rdb.LPush(ctx, "tasks", data).Err()
 	if err != nil {
 		return err
@@ -305,6 +307,8 @@ func view(c echo.Context) error {
 		}
 
 		res, err := json.Marshal(analytic)
+
+		fmt.Println("Analytic pushed to redis : ", res)
 
 		err = rdb.LPush(ctx, "tasks", res).Err()
 
