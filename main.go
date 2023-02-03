@@ -194,17 +194,6 @@ func saveAnalytic(c echo.Context, ctx context.Context, rdb *redis.Client, page P
 		return err
 	}
 
-	exists, err := rdb.Exists(ctx, "tasks").Result()
-	if err != nil {
-		return err
-	}
-
-	if exists == 0 {
-		if err = rdb.Set(ctx, "tasks", "", 0).Err(); err != nil {
-			return err
-		}
-	}
-
 	err = rdb.LPush(ctx, "tasks", data).Err()
 	if err != nil {
 		return err
