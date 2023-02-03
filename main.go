@@ -61,6 +61,14 @@ type AnalyticParam struct {
 //	FUNCTIONS
 //
 // -------------------------------------------------------- //
+func PrettyStruct(data interface{}) (string, error) {
+	val, err := json.MarshalIndent(data, "", "    ")
+	if err != nil {
+		return "", err
+	}
+	return string(val), nil
+}
+
 func GetPageToDispatch(campaign Campaign) Page {
 	var page Page
 
@@ -195,7 +203,12 @@ func saveAnalytic(c echo.Context, ctx context.Context, rdb *redis.Client, page P
 		return err
 	}
 
-	fmt.Println("Analytic pushed to redis : ", data)
+	res, err := PrettyStruct(analytic)
+	fmt.Println("----------------------------")
+	fmt.Println("Analytic (hit) pushed to redis")
+	fmt.Println("----------------------------")
+	fmt.Println(res)
+
 	err = rdb.LPush(ctx, "tasks", data).Err()
 	if err != nil {
 		return err
@@ -250,10 +263,8 @@ func redirect(c echo.Context) error {
 	val, err := rdb.Get(ctx, "campaign:"+key).Result()
 
 	if err != nil {
-
 		rdb.Close()
 		ctx.Done()
-
 		runtime.GC()
 
 		return c.String(http.StatusOK, "Campaign not found")
@@ -270,7 +281,6 @@ func redirect(c echo.Context) error {
 
 	rdb.Close()
 	ctx.Done()
-
 	runtime.GC()
 
 	return c.Redirect(302, getPageUrl(c, page))
@@ -307,14 +317,16 @@ func view(c echo.Context) error {
 		}
 
 		res, err := json.Marshal(analytic)
-
-		fmt.Println("Analytic pushed to redis : ", res)
-
 		err = rdb.LPush(ctx, "tasks", res).Err()
-
 		if err != nil {
 			panic(err)
 		}
+
+		res2, err := PrettyStruct(analytic)
+		fmt.Println("----------------------------")
+		fmt.Println("Analytic (view) pushed to redis")
+		fmt.Println("----------------------------")
+		fmt.Println(res2)
 
 		analytic = nil
 
