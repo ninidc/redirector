@@ -203,14 +203,15 @@ func saveAnalytic(c echo.Context, ctx context.Context, rdb *redis.Client, page P
 		return err
 	}
 
-	res, err := PrettyStruct(analytic)
-	fmt.Println("----------------------------")
-	fmt.Println("Analytic (hit) pushed to redis")
-	fmt.Println("----------------------------")
-	fmt.Println(res)
-
 	err = rdb.LPush(ctx, "tasks", data).Err()
 	if err != nil {
+
+		res, err := PrettyStruct(analytic)
+		fmt.Println("----------------------------")
+		fmt.Println("Analytic (hit) pushed to redis")
+		fmt.Println("----------------------------")
+		fmt.Println(res)
+
 		return err
 	}
 
@@ -318,21 +319,24 @@ func view(c echo.Context) error {
 
 		res, err := json.Marshal(analytic)
 		err = rdb.LPush(ctx, "tasks", res).Err()
-		if err != nil {
-			panic(err)
-		}
 
-		res2, err := PrettyStruct(analytic)
-		fmt.Println("----------------------------")
-		fmt.Println("Analytic (view) pushed to redis")
-		fmt.Println("----------------------------")
-		fmt.Println(res2)
+		if err != nil {
+
+			res2, err := PrettyStruct(analytic)
+			fmt.Println("----------------------------")
+			fmt.Println("Analytic (view) pushed to redis")
+			fmt.Println("----------------------------")
+			fmt.Println(res2)
+
+			if err != nil {
+			}
+			// panic(err)
+		}
 
 		analytic = nil
 
 		rdb.Close()
 		ctx.Done()
-
 		runtime.GC()
 	}
 
