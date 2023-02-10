@@ -16,10 +16,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cesbo/go-logtail"
 	"github.com/go-redis/redis/v8"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	echopprof "github.com/sevenNt/echo-pprof"
+	"github.com/rs/zerolog"
 )
 
 // -------------------------------------------------------- //
@@ -255,6 +256,12 @@ func tracking(c echo.Context) error {
 	return c.Blob(http.StatusOK, "application/javascript; charset=utf-8", output)
 }
 
+func writeLog(s string) {
+	token := "EFnv7f3xN8Hy2iFMcthRqHHU"
+	logger := logtail.NewLogtail(token).NewLogger()
+	logger.Print(s)
+}
+
 func redirect(c echo.Context) error {
 	key := c.Param("key")
 	ctx := context.Background()
@@ -284,7 +291,12 @@ func redirect(c echo.Context) error {
 	ctx.Done()
 	runtime.GC()
 
-	return c.Redirect(302, getPageUrl(c, page))
+	url := getPageUrl(c, page)
+
+	writeLog("Referer " + c.Request().Referer())
+	writeLog("Redirect to " + url)
+
+	return c.Redirect(302, url)
 }
 
 func root(c echo.Context) error {
@@ -353,6 +365,8 @@ func main() {
 	debug.SetGCPercent(-1)
 	//	debug.SetMemoryLimit(1)
 
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+
 	e := echo.New()
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
@@ -363,8 +377,6 @@ func main() {
 	e.GET("/tracking.js", tracking)
 	e.GET("/:key", redirect)
 	e.GET("/", root)
-
-	echopprof.Wrap(e)
 
 	e.Start(":" + os.Getenv("HTTP_PORT"))
 }
