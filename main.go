@@ -179,12 +179,17 @@ func getRedisClient() *redis.Client {
 	}
 }
 
+func getDateTime() string {
+	loc, _ := time.LoadLocation("Europe/Paris")
+	return time.Now().In(loc).Format("2006-01-02 15:04:05")
+}
+
 func saveAnalytic(c echo.Context, ctx context.Context, rdb *redis.Client, page Page, t string) error {
 	params := c.Request().URL.Query()
 
 	analytic := Analytic{
 		page.ID,
-		time.Now().Format("2006-01-02"),
+		getDateTime(),
 		t,
 		[]AnalyticParam{},
 	}
@@ -315,7 +320,7 @@ func view(c echo.Context) error {
 
 		analytic := &Analytic{
 			intoid,
-			time.Now().Format("2006-01-02"),
+			getDateTime(),
 			"view",
 			[]AnalyticParam{},
 		}
