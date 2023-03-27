@@ -298,8 +298,8 @@ func redirect(c echo.Context) error {
 
 	url := getPageUrl(c, page)
 
-	writeLog("Referer " + c.Request().Referer())
-	writeLog("Redirect to " + url)
+	writeLog("Input URL : " + c.Request().URL.String())
+	writeLog("Output URL : " + url)
 
 	return c.Redirect(302, url)
 }
