@@ -196,10 +196,12 @@ func saveAnalytic(c echo.Context, ctx context.Context, rdb *redis.Client, page P
 
 	if len(params) > 0 {
 		for k := range params {
-			analytic.addParam(AnalyticParam{
-				k,
-				params.Get(k),
-			})
+			if k == "pubfeed" {
+				analytic.addParam(AnalyticParam{
+					k,
+					params.Get(k),
+				})
+			}
 		}
 	}
 
