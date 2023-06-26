@@ -262,7 +262,8 @@ func tracking(c echo.Context) error {
 }
 
 func writeLog(s string) {
-	token := "EFnv7f3xN8Hy2iFMcthRqHHU"
+	//token := "EFnv7f3xN8Hy2iFMcthRqHHU"
+	token := os.Getenv("LOGTAIL_TOKEN") //"C64u6nYXMESahJ34gQMPBNW9"
 	logger := logtail.NewLogtail(token).NewLogger()
 	logger.Print(s)
 }
